@@ -1,0 +1,23 @@
+# Claude's working memory system — internal notes, not part of the public project.
+# Kept local-only on purpose; never pushed to GitHub.
+CLAUDE.md
+active-work.md
+.claude/
+knowledge/
+logs/
+threads/
+
+# Secrets — never commit these
+.env
+.env.*
+*.pem
+*.key
+*.p12
+credentials.json
+secrets.*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
