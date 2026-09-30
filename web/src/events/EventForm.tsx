@@ -16,7 +16,7 @@ type Props = { eventId: string | null; onDone: () => void }
 type EventStatus = 'draft' | 'published' | 'cancelled'
 
 // Calls the server-side Eventbrite function and returns its plain-English message on failure.
-async function callEventbrite(action: 'sync' | 'publish' | 'clear_check', eventId: string): Promise<string | null> {
+async function callEventbrite(action: 'sync' | 'publish' | 'cancel' | 'clear_check', eventId: string): Promise<string | null> {
   const { error } = await supabase.functions.invoke('eventbrite', { body: { action, eventId } })
   if (!error) return null
   if (error instanceof FunctionsHttpError) {
@@ -58,7 +58,7 @@ export function EventForm({ eventId: initialId, onDone }: Props) {
     })
   }, [])
 
-  async function runEventbrite(action: 'sync' | 'publish' | 'clear_check', id: string) {
+  async function runEventbrite(action: 'sync' | 'publish' | 'cancel' | 'clear_check', id: string) {
     setSending(true)
     const message = await callEventbrite(action, id)
     await loadEventbrite(id)
@@ -123,11 +123,16 @@ export function EventForm({ eventId: initialId, onDone }: Props) {
     }
 
     const row = { ...toRow(values), cover_image_path: path }
-    const { error } = eventId
-      ? await supabase.from('events').update(row).eq('id', eventId)
-      : await supabase.from('events').insert({ id, ...row })
+    const { data: saved, error } = eventId
+      ? await supabase.from('events').update(row).eq('id', eventId).select('id')
+      : await supabase.from('events').insert({ id, ...row }).select('id')
     setSaving(false)
     if (error) return setSaveError('The event couldn’t be saved. Please check the details and try again.')
+    if (!saved?.length) {
+      // The database refuses edits to a cancelled event (e.g. cancelled in another tab).
+      await loadEventbrite(id)
+      return setSaveError('This event has been cancelled, so it can’t be edited. Nothing was saved.')
+    }
 
     setEventId(id)
     setCoverPath(path)
@@ -138,7 +143,8 @@ export function EventForm({ eventId: initialId, onDone }: Props) {
       : 'Saved in the dashboard, but Eventbrite wasn’t updated. See below.')
   }
 
-  const isLive = eventStatus === 'published' || eventbrite?.status === 'live'
+  const isCancelled = eventStatus === 'cancelled' || eventbrite?.status === 'cancelled'
+  const isLive = !isCancelled && (eventStatus === 'published' || eventbrite?.status === 'live')
 
   if (loading) return <p className="muted">Loading…</p>
 
@@ -147,7 +153,9 @@ export function EventForm({ eventId: initialId, onDone }: Props) {
       <button type="button" className="link" onClick={onDone}>← Back to events</button>
       <h2>{eventId ? 'Edit event' : 'New event'}</h2>
       <p className="muted">
-        {isLive
+        {isCancelled
+          ? 'This event is cancelled, so it can’t be edited or published.'
+          : isLive
           ? 'This event is live. Saving updates it on Eventbrite straight away.'
           : 'Saving updates a private Eventbrite draft. Nothing goes public until you press Publish.'}
       </p>
@@ -158,11 +166,13 @@ export function EventForm({ eventId: initialId, onDone }: Props) {
           busy={sending}
           onRetry={() => runEventbrite('sync', eventId)}
           onPublish={() => runEventbrite('publish', eventId)}
+          onCancel={() => runEventbrite('cancel', eventId)}
           onClearCheck={async () => { if (await runEventbrite('clear_check', eventId)) await runEventbrite('sync', eventId) }}
         />
       )}
 
       <form onSubmit={onSubmit} noValidate>
+        <fieldset className="plain" disabled={isCancelled}>
         <Field label="Title" error={errors.title}>
           <input value={values.title} onChange={(e) => set('title', e.target.value)} />
         </Field>
@@ -227,6 +237,7 @@ export function EventForm({ eventId: initialId, onDone }: Props) {
         <button type="submit" disabled={saving || sending}>
           {saving || sending ? 'Saving…' : isLive ? 'Save and update live event' : 'Save draft'}
         </button>
+        </fieldset>
       </form>
     </section>
   )

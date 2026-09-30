@@ -128,6 +128,16 @@ begin
     report := report || 'PASS  the app cannot create an event as already published'::text;
   end;
 
+  -- A cancelled event is read-only for the app. (Set as the table owner, as the server function would.)
+  perform set_config('role', 'postgres', true);
+  update public.events set status = 'cancelled' where id = test_ev;
+  perform set_config('role', 'authenticated', true);
+  update public.events set title = 'Edited after cancel' where id = test_ev;
+  get diagnostics n = row_count;
+  passed := n = 0;
+  report := report || format('%s  a cancelled event cannot be edited (%s rows changed)', case when passed then 'PASS' else 'FAIL' end, n);
+  failures := failures + (not passed)::int;
+
   ------------------------------------------------------------------ no role
   perform set_config('request.jwt.claims',
     json_build_object('sub', norole_id, 'role', 'authenticated')::text, true);

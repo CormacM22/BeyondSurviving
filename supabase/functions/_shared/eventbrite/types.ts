@@ -54,7 +54,8 @@ export type Result = { ok: true; url: string | null } | { ok: false; message: st
 
 /** An error response from Eventbrite, with its HTTP status. */
 export class EventbriteError extends Error {
-  constructor(readonly status: number, message: string) {
+  /** `message` is Eventbrite's description; `code` its error code, e.g. 'CANNOT_CANCEL'. */
+  constructor(readonly status: number, message: string, readonly code?: string) {
     super(message)
   }
 
@@ -78,6 +79,8 @@ export interface EventbriteApi {
   setDescription(eventId: string, html: string): Promise<void>
   uploadLogo(file: { bytes: Uint8Array; contentType: string }): Promise<string>
   publish(eventId: string): Promise<void>
+  /** Cancels a draft or live event. Can't be undone; safe to repeat. */
+  cancel(eventId: string): Promise<void>
   /** Eventbrite's own status for the event, e.g. 'draft' or 'live'. */
   getEventStatus(eventId: string): Promise<string>
 }
@@ -99,4 +102,5 @@ export interface PublicationStore {
   fail(message: string, opts: { needsCheck?: boolean; meta?: Meta }): Promise<void>
   loadCover(path: string): Promise<{ bytes: Uint8Array; contentType: string }>
   markEventPublished(): Promise<void>
+  markEventCancelled(): Promise<void>
 }

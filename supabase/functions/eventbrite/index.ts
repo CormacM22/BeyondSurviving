@@ -2,6 +2,7 @@
 //
 //   POST { action: 'sync',        eventId }  create or update the Eventbrite copy
 //   POST { action: 'publish',     eventId }  make the Eventbrite draft live
+//   POST { action: 'cancel',      eventId }  cancel on Eventbrite and in the dashboard (can't be undone)
 //   POST { action: 'clear_check', eventId }  after a person has checked Eventbrite
 //                                            for a duplicate, allow saving again
 //
@@ -13,7 +14,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { eventbriteApi } from '../_shared/eventbrite/api.ts'
 import { publicationStore } from '../_shared/eventbrite/store.ts'
-import { publishOnEventbrite, syncToEventbrite } from '../_shared/eventbrite/sync.ts'
+import { cancelOnEventbrite, publishOnEventbrite, syncToEventbrite } from '../_shared/eventbrite/sync.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -44,7 +45,7 @@ Deno.serve(async (req) => {
     if (permError || allowed !== true) return reply(403, { ok: false, message: 'You don’t have access to events.' })
 
     const { action, eventId } = await req.json().catch(() => ({}))
-    if (typeof eventId !== 'string' || !['sync', 'publish', 'clear_check'].includes(action)) {
+    if (typeof eventId !== 'string' || !['sync', 'publish', 'cancel', 'clear_check'].includes(action)) {
       return reply(400, { ok: false, message: 'Bad request' })
     }
 
@@ -71,7 +72,9 @@ Deno.serve(async (req) => {
     const store = publicationStore(db, eventId, 'eventbrite')
     const result = action === 'sync'
       ? await syncToEventbrite(api, store, { listed: Deno.env.get('EVENTBRITE_LISTED') === 'true' })
-      : await publishOnEventbrite(api, store)
+      : action === 'publish'
+      ? await publishOnEventbrite(api, store)
+      : await cancelOnEventbrite(api, store)
 
     return reply(result.ok ? 200 : 422, result)
   } catch (e) {

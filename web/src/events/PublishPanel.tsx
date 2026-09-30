@@ -12,6 +12,7 @@ type Props = {
   busy: boolean
   onRetry: () => void
   onPublish: () => void
+  onCancel: () => void
   onClearCheck: () => void
 }
 
@@ -22,8 +23,9 @@ const STATUS_TEXT: Record<EventbriteState['status'], string> = {
   cancelled: 'Cancelled',
 }
 
-export function PublishPanel({ state, busy, onRetry, onPublish, onClearCheck }: Props) {
+export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClearCheck }: Props) {
   const [confirming, setConfirming] = useState(false)
+  const [confirmingCancel, setConfirmingCancel] = useState(false)
 
   if (!state) return null
 
@@ -53,7 +55,7 @@ export function PublishPanel({ state, busy, onRetry, onPublish, onClearCheck }: 
             I’ve checked Eventbrite, try again
           </button>
         </>
-      ) : state.lastError && !busy ? (
+      ) : state.lastError && !busy && state.status !== 'cancelled' ? (
         <button className="secondary" onClick={onRetry}>Try sending to Eventbrite again</button>
       ) : null}
 
@@ -68,6 +70,34 @@ export function PublishPanel({ state, busy, onRetry, onPublish, onClearCheck }: 
           </div>
         ) : (
           <button disabled={busy} onClick={() => setConfirming(true)}>Publish on Eventbrite…</button>
+        )
+      )}
+
+      {state.status !== 'cancelled' && !state.needsCheck && (
+        confirmingCancel ? (
+          <div className="confirm confirm-danger">
+            <p>
+              <strong>Cancel this event?</strong>{' '}
+              {state.status === 'not_started'
+                ? 'It hasn’t been sent to Eventbrite, so it’s only cancelled here.'
+                : 'It’s cancelled on Eventbrite straight away.'}{' '}
+              <strong>This can’t be undone.</strong>
+            </p>
+            {state.status === 'live' && (
+              <p>
+                If anyone has registered, Eventbrite only allows cancelling on Eventbrite itself, after refunding
+                every registration. The dashboard will explain. It doesn’t contact people who’ve registered.
+              </p>
+            )}
+            <div className="row-start">
+              <button className="danger" disabled={busy} onClick={() => { setConfirmingCancel(false); onCancel() }}>
+                Yes, cancel the event
+              </button>
+              <button className="secondary" disabled={busy} onClick={() => setConfirmingCancel(false)}>Keep it</button>
+            </div>
+          </div>
+        ) : (
+          <button className="link danger-link" disabled={busy} onClick={() => setConfirmingCancel(true)}>Cancel event…</button>
         )
       )}
     </div>

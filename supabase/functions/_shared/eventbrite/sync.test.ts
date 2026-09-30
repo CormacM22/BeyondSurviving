@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { publishOnEventbrite, syncToEventbrite } from './sync.ts'
+import { cancelOnEventbrite, publishOnEventbrite, syncToEventbrite } from './sync.ts'
 import { EventbriteError } from './types.ts'
 import type { Claim, EventbriteApi, EventRecord, Meta, Publication, PublicationStore } from './types.ts'
 import { inPersonEvent } from './fixtures.ts'
@@ -8,7 +8,7 @@ import { inPersonEvent } from './fixtures.ts'
 //  'refused'   Eventbrite clearly said no (400): it did nothing
 //  'lost'      Eventbrite DID the thing, but the reply never arrived (network drop, timeout)
 //  'unclear'   a 502 / network error before we know anything
-type Failure = 'refused' | 'lost' | 'unclear'
+type Failure = 'refused' | 'lost' | 'unclear' | 'has_registrations'
 
 // A fake Eventbrite that keeps its own state, records calls, and can fail a step once.
 class FakeEventbrite implements EventbriteApi {
@@ -25,6 +25,8 @@ class FakeEventbrite implements EventbriteApi {
     this.failures.delete(name)
     if (failure === 'refused') throw new EventbriteError(400, 'ARGUMENTS_ERROR')
     if (failure === 'unclear') throw new EventbriteError(502, 'Bad gateway')
+    // What Eventbrite really replies when cancelling an event people have registered for.
+    if (failure === 'has_registrations') throw new EventbriteError(400, 'This event cannot be canceled.', 'CANNOT_CANCEL')
     const result = act()
     if (failure === 'lost') throw new TypeError('network connection lost')
     return result
@@ -60,6 +62,7 @@ class FakeEventbrite implements EventbriteApi {
       ev.status = 'live'
     })
   }
+  cancel(id: string) { return this.step('cancel', () => { this.events.get(id)!.status = 'canceled' }) }
   getEventStatus(id: string) { return this.step('getStatus', () => this.events.get(id)?.status ?? 'unknown') }
 
   get eventCount() { return this.events.size }
@@ -77,6 +80,7 @@ class FakeStore implements PublicationStore {
   eventPublished = false
   failNextWrite = false
   failNextFail = false
+  failMarkCancelled = false
 
   private write() {
     if (this.failNextWrite) { this.failNextWrite = false; throw new Error('database unavailable') }
@@ -105,6 +109,12 @@ class FakeStore implements PublicationStore {
   }
   async loadCover(path: string) { return { bytes: new Uint8Array([1, 2, 3]), contentType: path.endsWith('.png') ? 'image/png' : 'image/jpeg' } }
   async markEventPublished() { this.write(); this.eventPublished = true }
+  eventCancelled = false
+  async markEventCancelled() {
+    this.write()
+    if (this.failMarkCancelled) { this.failMarkCancelled = false; throw new Error('database unavailable') }
+    this.eventCancelled = true; this.event = { ...this.event, status: 'cancelled' }
+  }
 }
 
 let eb: FakeEventbrite
@@ -114,6 +124,7 @@ const sync = (ev: EventRecord = inPersonEvent) => {
   return syncToEventbrite(eb, store, { listed: false })
 }
 const publish = () => publishOnEventbrite(eb, store)
+const cancel = () => cancelOnEventbrite(eb, store)
 // Simulates "some time later": a lock left behind by a crashed request has gone stale.
 const later = () => { store.lockStale = true }
 
@@ -161,7 +172,7 @@ describe('syncToEventbrite: saving again', () => {
     await sync()
     eb.calls = []
     await sync({ ...inPersonEvent, capacity: 15 })
-    expect(eb.calls).toEqual(['updateEvent', 'updateTicket:15', 'setDescription', 'getStatus'])
+    expect(eb.calls).toEqual(['getStatus', 'updateEvent', 'updateTicket:15', 'setDescription'])
     expect(eb.eventCount).toBe(1)
   })
 
@@ -169,7 +180,7 @@ describe('syncToEventbrite: saving again', () => {
     await sync()
     eb.calls = []
     await sync({ ...inPersonEvent, public_area: 'Westport' })
-    expect(eb.calls[0]).toBe('createVenue:Westport')
+    expect(eb.calls.slice(0, 2)).toEqual(['getStatus', 'createVenue:Westport'])
   })
 
   it('keeps the status of a live event when it is edited', async () => {
@@ -350,7 +361,7 @@ describe('publishOnEventbrite', () => {
     eb.calls = []
     const result = await publish()
     expect(result.ok).toBe(true)
-    expect(eb.calls).toEqual(['publish'])
+    expect(eb.calls).toEqual(['getStatus', 'publish', 'getStatus'])
     expect(store.pub.status).toBe('live')
     expect(store.eventPublished).toBe(true)
   })
@@ -418,3 +429,241 @@ describe('publishOnEventbrite', () => {
     expect(store.eventPublished).toBe(true)
   })
 })
+
+describe('syncToEventbrite: an event cancelled on Eventbrite is never edited', () => {
+  it('if Eventbrite says it is cancelled, nothing is sent and the dashboard records it', async () => {
+    await sync()
+    eb.events.get(store.pub.externalId!)!.status = 'canceled'
+    eb.calls = []
+    const result = await sync({ ...inPersonEvent, title: 'Edited after cancel' })
+    expect(result.ok).toBe(false)
+    expect(eb.calls).toEqual(['getStatus'])
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+    expect(store.locked).toBe(false)
+  })
+})
+
+describe('cancelOnEventbrite', () => {
+  it('an event never sent to Eventbrite is just marked cancelled', async () => {
+    const result = await cancel()
+    expect(result.ok).toBe(true)
+    expect(eb.calls).toEqual([])
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+  })
+
+  it('cancels a draft on Eventbrite', async () => {
+    await sync()
+    eb.calls = []
+    expect((await cancel()).ok).toBe(true)
+    expect(eb.calls).toEqual(['cancel'])
+    expect(eb.events.get(store.pub.externalId!)!.status).toBe('canceled')
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+  })
+
+  it('cancels a live event on Eventbrite', async () => {
+    await sync()
+    await publish()
+    eb.calls = []
+    expect((await cancel()).ok).toBe(true)
+    expect(eb.calls).toEqual(['cancel'])
+    expect(store.pub.status).toBe('cancelled')
+  })
+
+  it('cancelling again does not call Eventbrite', async () => {
+    await sync()
+    await cancel()
+    eb.calls = []
+    expect((await cancel()).ok).toBe(true)
+    expect(eb.calls).toEqual([])
+  })
+
+  it('if the cancel reply was lost, it checks Eventbrite and records the cancel', async () => {
+    await sync()
+    eb.failNext('cancel', 'lost')
+    expect((await cancel()).ok).toBe(true)
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+  })
+
+  it('if Eventbrite refuses, nothing changes and the reason is shown', async () => {
+    await sync()
+    await publish()
+    eb.failNext('cancel', 'refused')
+    const result = await cancel()
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.message).toMatch(/ARGUMENTS_ERROR/)
+    expect(store.pub.status).toBe('live')
+    expect(store.eventCancelled).toBe(false)
+    expect(store.locked).toBe(false)
+  })
+
+  it('if it was cancelled on Eventbrite but the dashboard could not record it, cancelling again repairs it', async () => {
+    await sync()
+    store.failNextWrite = true
+    expect((await cancel()).ok).toBe(false)
+    expect(store.locked).toBe(false)
+    expect((await cancel()).ok).toBe(true)
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+  })
+
+  it('does nothing while a save is in progress', async () => {
+    await sync()
+    store.locked = true
+    eb.calls = []
+    expect((await cancel()).ok).toBe(false)
+    expect(eb.calls).toEqual([])
+  })
+
+  it('does nothing while an earlier save needs checking', async () => {
+    store.locked = true
+    store.lockStale = true
+    const result = await cancel()
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.message).toMatch(/check Eventbrite/i)
+    expect(eb.calls).toEqual([])
+    expect(store.eventCancelled).toBe(false)
+  })
+
+  it('after cancelling, saving and publishing are refused without contacting Eventbrite', async () => {
+    await sync()
+    await cancel()
+    eb.calls = []
+    expect((await syncToEventbrite(eb, store, { listed: false })).ok).toBe(false)
+    expect((await publish()).ok).toBe(false)
+    expect(eb.calls).toEqual([])
+  })
+})
+
+describe('cancelled events stay cancelled everywhere', () => {
+  it('Publish on an event cancelled directly on Eventbrite records the cancel, never "live"', async () => {
+    await sync()
+    eb.events.get(store.pub.externalId!)!.status = 'canceled'
+    eb.calls = []
+    const result = await publish()
+    expect(result.ok).toBe(false)
+    expect(eb.calls).not.toContain('publish')
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+    expect(store.eventPublished).toBe(false)
+  })
+
+  it('a publish Eventbrite claims worked but did not is not recorded as live', async () => {
+    await sync()
+    const orig = eb.publish.bind(eb)
+    eb.publish = async (id: string) => { eb.calls.push('publish') } // says yes, does nothing
+    const result = await publish()
+    eb.publish = orig
+    expect(result.ok).toBe(false)
+    expect(store.pub.status).toBe('draft')
+    expect(store.eventPublished).toBe(false)
+  })
+
+  it('if only the publication was recorded as cancelled, a save never creates an Eventbrite draft', async () => {
+    await cancel()                        // never sent: cancelled in the dashboard only
+    store.event = { ...inPersonEvent }    // simulate the event row not saying cancelled
+    store.eventCancelled = false
+    eb.calls = []
+    const result = await syncToEventbrite(eb, store, { listed: false })
+    expect(result.ok).toBe(false)
+    expect(eb.calls).toEqual([])
+    expect(store.eventCancelled).toBe(true) // repaired
+  })
+
+  it('the event is marked cancelled first, so a failure part-way leaves saving blocked', async () => {
+    await sync()
+    store.failNextWrite = false
+    // Eventbrite cancel works, the event row is written, then the publication write fails.
+    const origSucceed = store.succeed.bind(store)
+    store.succeed = async () => { throw new Error('database unavailable') }
+    expect((await cancel()).ok).toBe(false)
+    store.succeed = origSucceed
+    expect(store.eventCancelled).toBe(true)
+    eb.calls = []
+    expect((await syncToEventbrite(eb, store, { listed: false })).ok).toBe(false)
+    expect(eb.calls).toEqual([])
+  })
+
+  it('if the cancel could not be recorded at all, the message asks to press Cancel again', async () => {
+    await sync()
+    store.failMarkCancelled = true
+    const result = await cancel()
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.message).toMatch(/Cancel event/)
+    expect((await cancel()).ok).toBe(true)
+    expect(store.eventCancelled).toBe(true)
+  })
+
+  it('refusing to touch a cancelled event leaves no error behind', async () => {
+    await sync()
+    await cancel()
+    await syncToEventbrite(eb, store, { listed: false })
+    await publish()
+    expect(store.lastError).toBeNull()
+    expect(store.locked).toBe(false)
+  })
+})
+
+describe('cancelling an event people have registered for', () => {
+  it('explains how to cancel it on Eventbrite, and changes nothing', async () => {
+    await sync()
+    await publish()
+    eb.failNext('cancel', 'has_registrations')
+    const result = await cancel()
+    expect(result.ok).toBe(false)
+    expect(result.ok === false && result.message).toMatch(/registered/)
+    expect(result.ok === false && result.message).toMatch(/on Eventbrite/)
+    expect(store.pub.status).toBe('live')
+    expect(store.eventCancelled).toBe(false)
+    expect(store.locked).toBe(false)
+  })
+
+  it('once cancelled on Eventbrite, pressing Cancel here records it', async () => {
+    await sync()
+    await publish()
+    eb.failNext('cancel', 'has_registrations')
+    await cancel()
+    eb.events.get(store.pub.externalId!)!.status = 'canceled' // Ciara cancels it on Eventbrite
+    eb.failNext('cancel', 'has_registrations')                // and the API still says no
+    expect((await cancel()).ok).toBe(true)
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+  })
+})
+
+describe('an event deleted on Eventbrite (how Ciara cancels one with registrations)', () => {
+  // In the Eventbrite website: refund everyone, then "…" → Delete event.
+  const deleteOnEventbrite = () => { eb.events.get(store.pub.externalId!)!.status = 'deleted' }
+
+  it('pressing Cancel here records it as cancelled', async () => {
+    await sync()
+    await publish()
+    deleteOnEventbrite()
+    eb.failNext('cancel', 'refused') // Eventbrite: "already canceled or deleted"
+    expect((await cancel()).ok).toBe(true)
+    expect(store.pub.status).toBe('cancelled')
+    expect(store.eventCancelled).toBe(true)
+  })
+
+  it('saving never sends edits to it, and records the cancel', async () => {
+    await sync()
+    deleteOnEventbrite()
+    eb.calls = []
+    expect((await sync()).ok).toBe(false)
+    expect(eb.calls).toEqual(['getStatus'])
+    expect(store.eventCancelled).toBe(true)
+  })
+
+  it('publishing never touches it, and records the cancel', async () => {
+    await sync()
+    deleteOnEventbrite()
+    eb.calls = []
+    expect((await publish()).ok).toBe(false)
+    expect(eb.calls).not.toContain('publish')
+    expect(store.eventCancelled).toBe(true)
+  })
+})
+

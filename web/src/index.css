@@ -133,3 +133,10 @@ section > form { margin-top: 1rem; }
 .badge-draft, .badge-not_started { color: var(--muted); }
 .badge-live { color: #067647; border-color: #067647; }
 a { color: var(--accent); }
+
+fieldset.plain { border: 0; padding: 0; margin: 0; display: grid; gap: 1rem; min-width: 0; }
+fieldset.plain:disabled { opacity: 0.6; }
+.confirm-danger { border-left-color: var(--error); }
+button.danger { background: var(--error); color: #fff; }
+button.danger-link { color: var(--error); margin: 0; justify-self: start; }
+button.danger-link:hover { color: var(--error); text-decoration: underline; }

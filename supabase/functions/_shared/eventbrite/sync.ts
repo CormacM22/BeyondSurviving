@@ -10,7 +10,7 @@
 
 import { descriptionHtml, eventPayload } from './payload.ts'
 import { EventbriteError } from './types.ts'
-import type { EventbriteApi, Meta, PublicationStore, Result } from './types.ts'
+import type { EventbriteApi, Meta, PublicationStatus, PublicationStore, Result } from './types.ts'
 
 const BUSY = 'This event is already being sent to Eventbrite. Please wait a moment and refresh.'
 const NEEDS_CHECK =
@@ -23,6 +23,35 @@ function userMessage(e: unknown): string {
   if (e instanceof EventbriteError) return `Eventbrite said: ${e.message}`
   console.error(e)
   return GENERIC
+}
+
+const CANCELLED = 'This event is cancelled, so it can’t be changed or published.'
+
+/**
+ * Eventbrite statuses that mean the event is over for good: cancelled via the
+ * API, or deleted in the Eventbrite website (how an event with registrations is
+ * cancelled). Eventbrite still accepts edits to both, so we must never send any.
+ */
+const isGone = (status: string) => status === 'canceled' || status === 'deleted'
+// Eventbrite refuses to cancel through the API once anyone has registered
+// (confirmed on the test account 2026-09-30); it has to be done on Eventbrite.
+// In the Eventbrite website: refund every registration (even for free events), then
+// "…" beside the event → Delete event (found by Cormac 2026-09-30).
+const HAS_REGISTRATIONS =
+  'Eventbrite won’t let the dashboard cancel an event that people have registered for. ' +
+  'Please do it on Eventbrite: first refund every registration (even though the event is free), ' +
+  'then in your events list click the “…” beside this event and choose Delete event. ' +
+  'Then press “Cancel event…” here again to record it.'
+
+/**
+ * Records a cancellation in the dashboard and releases the lock, leaving no error
+ * behind. The event row goes first: it's what blocks saving and publishing, so
+ * if the second write fails, nothing can be sent in the meantime.
+ */
+async function settleCancelled(store: PublicationStore, meta: Meta): Promise<Result> {
+  await store.markEventCancelled()
+  await store.succeed('cancelled', meta)
+  return { ok: false, message: CANCELLED }
 }
 
 /** Creates the Eventbrite draft on first save; updates it on every later save (draft or live). Never publishes. */
@@ -55,7 +84,17 @@ export async function syncToEventbrite(
 
   try {
     const ev = await store.loadEvent()
-    if (ev.status === 'cancelled') return release('This event is cancelled, so changes aren’t sent to Eventbrite.')
+    if (ev.status === 'cancelled' || claim.status === 'cancelled') return await settleCancelled(store, meta)
+
+    let status: PublicationStatus = claim.status === 'not_started' ? 'draft' : claim.status
+    if (externalId !== null) {
+      // Ask Eventbrite first. It accepts edits even to a cancelled event, so this
+      // is what stops us changing one; it also repairs a publish or cancel that
+      // finished on Eventbrite without being recorded here.
+      const remote = await api.getEventStatus(externalId)
+      if (isGone(remote)) return await settleCancelled(store, meta)
+      if (remote === 'live' || remote === 'started') status = 'live'
+    }
 
     let venueId: string | null = null
     if (!ev.is_online && ev.public_area) {
@@ -120,13 +159,6 @@ export async function syncToEventbrite(
       meta.coverPath = coverPath
     }
 
-    // Take Eventbrite's word for whether the event is live, so the dashboard
-    // repairs itself if an earlier publish finished without being recorded.
-    let status = claim.status === 'not_started' ? 'draft' : claim.status
-    if (claim.externalId !== null) {
-      const remote = await api.getEventStatus(externalId)
-      if (remote === 'live' || remote === 'started') status = 'live'
-    }
     await store.succeed(status, meta)
     if (status === 'live') await store.markEventPublished()
     return { ok: true, url }
@@ -162,21 +194,80 @@ export async function publishOnEventbrite(api: EventbriteApi, store: Publication
 
   try {
     const ev = await store.loadEvent()
-    if (ev.status === 'cancelled') return release('This event is cancelled, so it can’t be published.')
+    if (ev.status === 'cancelled' || claim.status === 'cancelled') return await settleCancelled(store, claim.meta)
     if (claim.status === 'live') return recordLive()
     if (claim.externalId === null || claim.status !== 'draft') {
       return release('Save the event to Eventbrite before publishing it.')
     }
 
-    try {
-      await api.publish(claim.externalId)
-    } catch (e) {
-      // The reply may have been lost after it went live, or an earlier publish may
-      // already have done it. Ask Eventbrite before reporting a failure.
-      const status = await api.getEventStatus(claim.externalId).catch(() => 'unknown')
-      if (status !== 'live' && status !== 'started') return release(userMessage(e))
+    // Ask Eventbrite first: it may have been cancelled or published there directly.
+    const isLive = (s: string) => s === 'live' || s === 'started'
+    const before = await api.getEventStatus(claim.externalId)
+    if (isGone(before)) return await settleCancelled(store, claim.meta)
+
+    if (!isLive(before)) {
+      let publishError: unknown = null
+      try {
+        await api.publish(claim.externalId)
+      } catch (e) {
+        publishError = e // the reply may have been lost after it went live: check below
+      }
+      // Only Eventbrite's own status counts: it says "published" even when it isn't.
+      const after = await api.getEventStatus(claim.externalId).catch(() => 'unknown')
+      if (isGone(after)) return await settleCancelled(store, claim.meta)
+      if (!isLive(after)) {
+        return release(publishError ? userMessage(publishError) : 'Eventbrite didn’t make the event live. Please try again.')
+      }
     }
     return recordLive()
+  } catch (e) {
+    return release(userMessage(e))
+  }
+}
+
+/**
+ * Cancels the event on Eventbrite (draft or live), then in the dashboard.
+ * Can't be undone. Safe to repeat, and repairs the dashboard if a cancel half-finished.
+ */
+export async function cancelOnEventbrite(api: EventbriteApi, store: PublicationStore): Promise<Result> {
+  const claim = await store.claim()
+  if (claim === 'busy') return { ok: false, message: BUSY }
+  if (claim === 'needs_check') return { ok: false, message: NEEDS_CHECK }
+
+  const release = async (message: string): Promise<Result> => {
+    await store.fail(message, {})
+    return { ok: false, message }
+  }
+  const recordCancelled = async (): Promise<Result> => {
+    try {
+      // Event row first: it's what blocks saving and publishing.
+      await store.markEventCancelled()
+      await store.succeed('cancelled', claim.meta)
+      return { ok: true, url: claim.url }
+    } catch (e) {
+      console.error(e)
+      return release(
+        'The event may be cancelled on Eventbrite, but the dashboard couldn’t record it. ' +
+          'Press “Cancel event…” again to finish.',
+      )
+    }
+  }
+
+  try {
+    // Never sent to Eventbrite, or already cancelled there: only the dashboard needs updating.
+    if (claim.externalId === null || claim.status === 'cancelled') return recordCancelled()
+
+    try {
+      await api.cancel(claim.externalId)
+    } catch (e) {
+      // The reply may have been lost after it was cancelled: ask before reporting a failure.
+      const status = await api.getEventStatus(claim.externalId).catch(() => 'unknown')
+      if (!isGone(status)) {
+        const hasRegistrations = e instanceof EventbriteError && e.code === 'CANNOT_CANCEL'
+        return release(hasRegistrations ? HAS_REGISTRATIONS : userMessage(e))
+      }
+    }
+    return recordCancelled()
   } catch (e) {
     return release(userMessage(e))
   }

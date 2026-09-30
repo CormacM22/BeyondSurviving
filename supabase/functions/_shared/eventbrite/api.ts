@@ -24,11 +24,13 @@ export function eventbriteApi(token: string, organizationId: string): Eventbrite
     const text = await res.text()
     if (!res.ok) {
       let detail = text.slice(0, 300)
+      let code: string | undefined
       try {
         const j = JSON.parse(text)
         detail = j.error_description ?? j.error ?? detail
+        code = j.error
       } catch { /* keep raw text */ }
-      throw new EventbriteError(res.status, detail)
+      throw new EventbriteError(res.status, detail, code)
     }
     return (text ? JSON.parse(text) : {}) as T
   }
@@ -101,6 +103,11 @@ export function eventbriteApi(token: string, organizationId: string): Eventbrite
     async publish(eventId) {
       const r = await call<{ published?: boolean }>('POST', `/events/${eventId}/publish/`)
       if (r.published === false) throw new EventbriteError(400, 'the event was not published')
+    },
+
+    async cancel(eventId) {
+      const r = await call<{ canceled?: boolean }>('POST', `/events/${eventId}/cancel/`)
+      if (r.canceled !== true) throw new Error('Eventbrite did not confirm the cancellation')
     },
 
     async getEventStatus(eventId) {

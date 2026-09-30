@@ -61,7 +61,13 @@ export function publicationStore(
     },
 
     async markEventPublished() {
-      const { error } = await db.from('events').update({ status: 'published' }).eq('id', eventId)
+      // Never turns a cancelled event back into a published one.
+      const { error } = await db.from('events').update({ status: 'published' }).eq('id', eventId).neq('status', 'cancelled')
+      if (error) throw new Error(`Database update failed: ${error.message}`)
+    },
+
+    async markEventCancelled() {
+      const { error } = await db.from('events').update({ status: 'cancelled' }).eq('id', eventId)
       if (error) throw new Error(`Database update failed: ${error.message}`)
     },
   }

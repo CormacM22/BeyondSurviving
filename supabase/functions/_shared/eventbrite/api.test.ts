@@ -46,3 +46,15 @@ describe('eventbriteApi requests', () => {
     await expect(eventbriteApi('tok', 'org').createEvent({})).rejects.toThrow(/without an event id/)
   })
 })
+
+describe('eventbriteApi errors', () => {
+  it('keeps Eventbrite’s error code alongside its description', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ error: 'CANNOT_CANCEL', error_description: 'This event cannot be canceled.', status_code: 400 }), { status: 400 }))
+    const err = await eventbriteApi('tok', 'org').cancel('1').catch((e) => e)
+    expect(err.status).toBe(400)
+    expect(err.code).toBe('CANNOT_CANCEL')
+    expect(err.message).toBe('This event cannot be canceled.')
+  })
+})
+
