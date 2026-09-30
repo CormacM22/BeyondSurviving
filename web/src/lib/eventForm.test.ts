@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { emptyForm, fromRow, toRow, validate, type EventFormValues } from './eventForm'
+import { copyOf, emptyForm, fromRow, toRow, validate, type EventFormValues } from './eventForm'
 
 const inPerson: EventFormValues = {
   ...emptyForm(),
@@ -86,5 +86,25 @@ describe('fromRow', () => {
   it('round-trips through the database shape', () => {
     const row = { ...toRow(inPerson), starts_at: '2026-10-10 10:00:00+00', ends_at: '2026-10-10 12:00:00+00' }
     expect(fromRow(row)).toEqual({ ...inPerson, title: 'Support Group – Mayo' })
+  })
+})
+
+describe('copying an event', () => {
+  const original = { ...toRow(inPerson), starts_at: '2026-10-10 10:00:00+00', ends_at: '2026-10-10 12:00:00+00' }
+
+  it('keeps every detail of the original', () => {
+    expect(copyOf(original)).toEqual({ ...inPerson, title: 'Support Group – Mayo' })
+  })
+
+  it('refuses to save until the start time is changed', () => {
+    const copy = copyOf(original)
+    expect(validate(copy, { copiedFromStart: copy.startLocal }).startLocal).toMatch(/new date/)
+    expect(validate({ ...copy, startLocal: '2026-11-14T11:00', endLocal: '2026-11-14T13:00' }, { copiedFromStart: copy.startLocal })).toEqual({})
+  })
+
+  it('the saved copy carries nothing from the original’s Eventbrite or website records', () => {
+    const row = toRow(copyOf(original)) as Record<string, unknown>
+    for (const key of ['id', 'status', 'created_by', 'event_publications', 'external_id', 'external_url'])
+      expect(row).not.toHaveProperty(key)
   })
 })

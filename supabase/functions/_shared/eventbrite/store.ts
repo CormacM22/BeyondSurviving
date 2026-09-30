@@ -33,6 +33,13 @@ export function publicationStore(
       return data as EventRecord
     },
 
+    async loadEventbriteLink() {
+      const { data, error } = await db.from('event_publications')
+        .select('status, external_url').eq('event_id', eventId).eq('target', 'eventbrite').maybeSingle()
+      if (error) throw new Error(`Couldn’t read the Eventbrite link: ${error.message}`)
+      return data ? { status: data.status as PublicationStatus, url: data.external_url as string | null } : null
+    },
+
     async recordCreated(externalId, url) {
       await update({ external_id: externalId, external_url: url })
     },

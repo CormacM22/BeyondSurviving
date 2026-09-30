@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { cancelOnEventbrite, publishOnEventbrite, syncToEventbrite } from './sync.ts'
 import { EventbriteError } from './types.ts'
-import type { Claim, EventbriteApi, EventRecord, Meta, Publication, PublicationStore } from './types.ts'
+import type { EventbriteApi, EventRecord } from './types.ts'
 import { inPersonEvent } from './fixtures.ts'
+import { FakeStore } from './fake-store.ts'
 
 // How a step can go wrong:
 //  'refused'   Eventbrite clearly said no (400): it did nothing
@@ -67,54 +68,6 @@ class FakeEventbrite implements EventbriteApi {
 
   get eventCount() { return this.events.size }
   ticketsOf(id: string) { return this.events.get(id)?.tickets ?? [] }
-}
-
-// A fake store holding one publication row, with the same lock rules as the real one.
-class FakeStore implements PublicationStore {
-  event: EventRecord = inPersonEvent
-  pub: Publication = { externalId: null, url: null, status: 'not_started', meta: {} }
-  locked = false
-  lockStale = false
-  needsCheck = false
-  lastError: string | null = null
-  eventPublished = false
-  failNextWrite = false
-  failNextFail = false
-  failMarkCancelled = false
-
-  private write() {
-    if (this.failNextWrite) { this.failNextWrite = false; throw new Error('database unavailable') }
-  }
-
-  async claim(): Promise<Claim> {
-    if (this.locked && !this.lockStale) return 'busy'
-    if (this.locked && this.pub.externalId === null) { this.needsCheck = true; return 'needs_check' }
-    this.locked = true
-    this.lockStale = false
-    return structuredClone(this.pub)
-  }
-  async loadEvent() { return structuredClone(this.event) }
-  async recordCreated(externalId: string, url: string) { this.write(); this.pub.externalId = externalId; this.pub.url = url }
-  async saveMeta(meta: Meta) { this.write(); this.pub.meta = { ...meta } }
-  async succeed(status: Publication['status'], meta: Meta) {
-    this.write()
-    this.pub.status = status; this.pub.meta = { ...meta }; this.locked = false; this.lastError = null; this.needsCheck = false
-  }
-  async fail(message: string, opts: { needsCheck?: boolean; meta?: Meta }) {
-    if (this.failNextFail) { this.failNextFail = false; throw new Error('database unavailable') }
-    this.lastError = message
-    if (opts.meta) this.pub.meta = { ...opts.meta }
-    if (opts.needsCheck) this.needsCheck = true
-    else this.locked = false
-  }
-  async loadCover(path: string) { return { bytes: new Uint8Array([1, 2, 3]), contentType: path.endsWith('.png') ? 'image/png' : 'image/jpeg' } }
-  async markEventPublished() { this.write(); this.eventPublished = true }
-  eventCancelled = false
-  async markEventCancelled() {
-    this.write()
-    if (this.failMarkCancelled) { this.failMarkCancelled = false; throw new Error('database unavailable') }
-    this.eventCancelled = true; this.event = { ...this.event, status: 'cancelled' }
-  }
 }
 
 let eb: FakeEventbrite

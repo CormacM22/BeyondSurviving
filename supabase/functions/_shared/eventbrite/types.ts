@@ -29,6 +29,12 @@ export type Meta = {
   venueArea?: string
   ticketClassId?: string
   coverPath?: string | null
+  /** WordPress: the status the dashboard last gave the post, to tell when Ciara has changed it. */
+  lastSetStatus?: string
+  /** WordPress: Ciara has changed the post's status herself, so the dashboard never sets it again. */
+  statusOwnedByCiara?: boolean
+  /** WordPress: an informational note for the panel (not an error), e.g. "removed in WordPress". */
+  note?: string | null
 }
 
 export type PublicationStatus = 'not_started' | 'draft' | 'live' | 'cancelled'
@@ -90,6 +96,8 @@ export interface PublicationStore {
   claim(): Promise<Claim>
   /** Reads the event fresh, after the lock is taken, so a slow request can't send stale details. */
   loadEvent(): Promise<EventRecord>
+  /** The event's Eventbrite publication (status and link), for the website post. */
+  loadEventbriteLink(): Promise<{ status: PublicationStatus; url: string | null } | null>
   /** Must be called straight after Eventbrite creates the event. */
   recordCreated(externalId: string, url: string): Promise<void>
   saveMeta(meta: Meta): Promise<void>

@@ -1,7 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
-import { EventsPage } from './events/EventsPage'
+import { navigate, useRoute } from './lib/route'
+import { AppShell, PageHeader } from './layout/AppShell'
+import { SECTIONS, type Section } from './layout/sections'
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
@@ -31,52 +33,67 @@ function SignIn() {
     setBusy(true)
     setError(null)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setError('That email and password didn’t match. Please try again.')
+    if (error) setError('That email and password don’t match. Check them and try again.')
     setBusy(false)
   }
 
   return (
-    <main className="card">
-      <h1>Beyond Surviving</h1>
-      <p className="muted">Sign in to manage events.</p>
-      <form onSubmit={onSubmit}>
-        <label>
-          Email
-          <input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
-        </label>
-        <label>
-          Password
-          <input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-        </label>
-        {error && <p className="error" role="alert">{error}</p>}
-        <button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-      </form>
-    </main>
+    <div className="signin">
+      <img className="signin-logo" src="/logo.png" alt="Beyond Surviving" />
+      <main className="signin-card">
+        <h1 className="signin-title">Dashboard</h1>
+        <form onSubmit={onSubmit}>
+          <label className="field">
+            <span>Email</span>
+            <input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Password</span>
+            <input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          {error && <p className="error" role="alert">{error}</p>}
+          <button type="submit" className="btn btn-primary" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+      </main>
+    </div>
   )
 }
 
 function SignedIn({ session }: { session: Session }) {
-  const [canManageEvents, setCanManageEvents] = useState<boolean | null>(null)
+  const route = useRoute()
+  const [allowed, setAllowed] = useState<Section[] | null>(null)
 
+  // Only show the sections this user has permission for.
   useEffect(() => {
-    supabase.rpc('has_permission', { permission: 'events.manage' }).then(({ data, error }) => {
-      setCanManageEvents(!error && data === true)
-    })
+    Promise.all(
+      SECTIONS.map(async (s) => {
+        const { data, error } = await supabase.rpc('has_permission', { permission: s.permission })
+        return !error && data === true ? s : null
+      }),
+    ).then((found) => setAllowed(found.filter((s): s is Section => s !== null)))
   }, [])
 
+  const active = allowed?.find((s) => s.id === route.section) ?? null
+
+  // Land on the first section the user can use.
+  useEffect(() => {
+    if (allowed && allowed.length > 0 && !active) navigate(`/${allowed[0].id}`)
+  }, [allowed, active])
+
   return (
-    <>
-      <header className="topbar">
-        <strong>Beyond Surviving</strong>
-        <span className="muted">{session.user.email}</span>
-        <button className="secondary" onClick={() => supabase.auth.signOut()}>Sign out</button>
-      </header>
-      <main className="page">
-        {canManageEvents === false && (
-          <p className="error">Your account doesn’t have access to events yet.</p>
-        )}
-        {canManageEvents && <EventsPage />}
-      </main>
-    </>
+    <AppShell
+      sections={allowed ?? []}
+      activeId={active?.id ?? null}
+      email={session.user.email}
+      onSignOut={() => supabase.auth.signOut()}
+    >
+      {allowed && allowed.length === 0 && (
+        <PageHeader
+          title="No access yet"
+          summary="Your account isn’t set up for any part of the dashboard yet. Ask Ciara to give you access."
+        />
+      )}
+      {active && <active.Page parts={route.parts} />}
+    </AppShell>
   )
 }

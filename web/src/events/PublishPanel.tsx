@@ -30,7 +30,7 @@ export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClea
   if (!state) return null
 
   return (
-    <div className="panel" aria-live="polite">
+    <div className="step-card" aria-live="polite">
       <div className="row">
         <strong>Eventbrite</strong>
         <span className={`badge badge-${state.status}`}>{busy ? 'Sending…' : STATUS_TEXT[state.status]}</span>
@@ -51,12 +51,12 @@ export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClea
             Please sign in to Eventbrite and look under <strong>Events → Drafts</strong> for a copy of this event.
             If there is one, delete it there first.
           </p>
-          <button className="secondary" disabled={busy} onClick={onClearCheck}>
+          <button className="btn btn-secondary" disabled={busy} onClick={onClearCheck}>
             I’ve checked Eventbrite, try again
           </button>
         </>
       ) : state.lastError && !busy && state.status !== 'cancelled' ? (
-        <button className="secondary" onClick={onRetry}>Try sending to Eventbrite again</button>
+        <button className="btn btn-secondary" onClick={onRetry}>Try sending to Eventbrite again</button>
       ) : null}
 
       {state.status === 'draft' && !state.lastError && !state.needsCheck && (
@@ -64,12 +64,12 @@ export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClea
           <div className="confirm">
             <p><strong>Publish this event on Eventbrite?</strong> It becomes public and people can register straight away.</p>
             <div className="row-start">
-              <button disabled={busy} onClick={() => { setConfirming(false); onPublish() }}>Yes, publish it</button>
-              <button className="secondary" disabled={busy} onClick={() => setConfirming(false)}>Not yet</button>
+              <button className="btn btn-primary" disabled={busy} onClick={() => { setConfirming(false); onPublish() }}>Yes, publish it</button>
+              <button className="btn btn-secondary" disabled={busy} onClick={() => setConfirming(false)}>Not yet</button>
             </div>
           </div>
         ) : (
-          <button disabled={busy} onClick={() => setConfirming(true)}>Publish on Eventbrite…</button>
+          <button className="btn btn-primary" disabled={busy} onClick={() => setConfirming(true)}>Publish on Eventbrite…</button>
         )
       )}
 
@@ -90,14 +90,14 @@ export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClea
               </p>
             )}
             <div className="row-start">
-              <button className="danger" disabled={busy} onClick={() => { setConfirmingCancel(false); onCancel() }}>
+              <button className="btn btn-danger" disabled={busy} onClick={() => { setConfirmingCancel(false); onCancel() }}>
                 Yes, cancel the event
               </button>
-              <button className="secondary" disabled={busy} onClick={() => setConfirmingCancel(false)}>Keep it</button>
+              <button className="btn btn-secondary" disabled={busy} onClick={() => setConfirmingCancel(false)}>Keep it</button>
             </div>
           </div>
         ) : (
-          <button className="link danger-link" disabled={busy} onClick={() => setConfirmingCancel(true)}>Cancel event…</button>
+          <button className="btn-link danger-link" disabled={busy} onClick={() => setConfirmingCancel(true)}>Cancel event…</button>
         )
       )}
     </div>

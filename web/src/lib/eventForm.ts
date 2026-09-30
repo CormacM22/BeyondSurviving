@@ -63,12 +63,20 @@ export function emptyForm(): EventFormValues {
 
 const blank = (s: string) => s.trim() === ''
 
-export function validate(v: EventFormValues): FormErrors {
+/**
+ * `copiedFromStart`: when the form is a copy of another event, that event's start
+ * (Irish time). The copy can't be saved until its start is changed, so a
+ * forgotten date can't publish the same event twice.
+ */
+export function validate(v: EventFormValues, opts: { copiedFromStart?: string } = {}): FormErrors {
   const e: FormErrors = {}
   if (blank(v.title)) e.title = 'Please add a title.'
   if (blank(v.description)) e.description = 'Please add a description.'
   if (v.summary.trim().length > SUMMARY_MAX) e.summary = `Keep the summary to ${SUMMARY_MAX} characters or fewer.`
   if (!v.startLocal) e.startLocal = 'Please choose when it starts.'
+  else if (opts.copiedFromStart && v.startLocal === opts.copiedFromStart) {
+    e.startLocal = 'This is a copy: choose the new date and time.'
+  }
   if (!v.endLocal) e.endLocal = 'Please choose when it ends.'
   else if (v.startLocal && dublinLocalToUtc(v.endLocal) <= dublinLocalToUtc(v.startLocal)) {
     e.endLocal = 'The end needs to be after the start.'
@@ -117,3 +125,13 @@ export function fromRow(r: EventRow): EventFormValues {
     category: r.category,
   }
 }
+
+/**
+ * A new event's form, filled in from an existing event. Only the event's own
+ * details are copied: the copy gets its own Eventbrite event and website post
+ * (with its own link) when it's saved and published.
+ */
+export function copyOf(r: EventRow): EventFormValues {
+  return fromRow(r)
+}
+
