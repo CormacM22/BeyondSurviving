@@ -11,6 +11,7 @@
 do $tests$
 declare
   admin_id  constant uuid := '00000000-0000-0000-0000-00000000000a';
+  test_ev   constant uuid := '10000000-0000-0000-0000-000000000001';
   norole_id constant uuid := '00000000-0000-0000-0000-00000000000b';
   report   text[] := '{}';
   failures int := 0;
@@ -44,30 +45,30 @@ begin
     failures := failures + 1;
   end;
 
-  select count(*) into n from public.events;
+  select count(*) into n from public.events where id = test_ev;
   passed := n = 1;
   report := report || format('%s  admin can read events (saw %s)', case when passed then 'PASS' else 'FAIL' end, n);
   failures := failures + (not passed)::int;
 
-  passed := (select created_by from public.events limit 1) is not distinct from admin_id;
+  passed := (select created_by from public.events where id = test_ev) is not distinct from admin_id;
   report := report || format('%s  created_by is filled in automatically', case when passed then 'PASS' else 'FAIL' end);
   failures := failures + (not passed)::int;
 
-  update public.events set title = 'Support Group - Mayo (Oct)';
+  update public.events set title = 'Support Group - Mayo (Oct)' where id = test_ev;
   get diagnostics n = row_count;
   passed := n = 1;
   report := report || format('%s  admin can edit an event', case when passed then 'PASS' else 'FAIL' end);
   failures := failures + (not passed)::int;
 
-  delete from public.events;
-  select count(*) into n from public.events;
+  delete from public.events where id = test_ev;
+  select count(*) into n from public.events where id = test_ev;
   passed := n = 1;
   report := report || format('%s  events cannot be deleted, even by admin', case when passed then 'PASS' else 'FAIL' end);
   failures := failures + (not passed)::int;
 
   begin
     insert into public.event_publications (event_id, target)
-    values ('10000000-0000-0000-0000-000000000001', 'eventbrite');
+    values (test_ev, 'eventbrite');
     report := report || 'FAIL  the app cannot write publication records directly (it could)'::text;
     failures := failures + 1;
   exception when insufficient_privilege then
@@ -108,6 +109,23 @@ begin
     failures := failures + 1;
   exception when check_violation then
     report := report || 'PASS  category must be a known one'::text;
+  end;
+
+  begin
+    update public.events set status = 'published' where id = test_ev;
+    report := report || 'FAIL  the app cannot mark an event published itself (it could)'::text;
+    failures := failures + 1;
+  exception when insufficient_privilege then
+    report := report || 'PASS  the app cannot mark an event published itself'::text;
+  end;
+
+  begin
+    insert into public.events (title, description, starts_at, ends_at, is_online, capacity, category, status)
+    values ('Pre-published', 'x', '2026-10-10 19:00+01', '2026-10-10 20:00+01', true, 10, 'support_group', 'published');
+    report := report || 'FAIL  the app cannot create an event as already published (it could)'::text;
+    failures := failures + 1;
+  exception when insufficient_privilege then
+    report := report || 'PASS  the app cannot create an event as already published'::text;
   end;
 
   ------------------------------------------------------------------ no role

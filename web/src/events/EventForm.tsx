@@ -1,5 +1,7 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { FunctionsHttpError } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
+import { PublishPanel, type EventbriteState } from './PublishPanel'
 import {
   CATEGORIES, SUMMARY_MAX, emptyForm, fromRow, toRow, validate,
   type EventFormValues, type EventRow, type FormErrors,
@@ -11,20 +13,64 @@ const COVER_TYPES = ['image/jpeg', 'image/png']
 
 type Props = { eventId: string | null; onDone: () => void }
 
-export function EventForm({ eventId, onDone }: Props) {
+type EventStatus = 'draft' | 'published' | 'cancelled'
+
+// Calls the server-side Eventbrite function and returns its plain-English message on failure.
+async function callEventbrite(action: 'sync' | 'publish' | 'clear_check', eventId: string): Promise<string | null> {
+  const { error } = await supabase.functions.invoke('eventbrite', { body: { action, eventId } })
+  if (!error) return null
+  if (error instanceof FunctionsHttpError) {
+    const body = await error.context.json().catch(() => null)
+    if (body?.message) return body.message
+  }
+  return 'Couldn’t reach Eventbrite. Please check your connection and try again.'
+}
+
+export function EventForm({ eventId: initialId, onDone }: Props) {
+  const [eventId, setEventId] = useState(initialId)
+  const [eventStatus, setEventStatus] = useState<EventStatus>('draft')
+  const [eventbrite, setEventbrite] = useState<EventbriteState | null>(null)
+  const [sending, setSending] = useState(false)
+  const [savedNote, setSavedNote] = useState<string | null>(null)
   const [values, setValues] = useState<EventFormValues>(emptyForm)
   const [errors, setErrors] = useState<FormErrors>({})
   const [coverPath, setCoverPath] = useState<string | null>(null)
   const [coverPreview, setCoverPreview] = useState<string | null>(null)
   const [newCover, setNewCover] = useState<File | null>(null)
   const [coverError, setCoverError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(eventId !== null)
+  const [loading, setLoading] = useState(initialId !== null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
+  const loadEventbrite = useCallback(async (id: string) => {
+    const [{ data: pub }, { data: ev }] = await Promise.all([
+      supabase.from('event_publications')
+        .select('status, external_url, last_error, needs_check')
+        .eq('event_id', id).eq('target', 'eventbrite').maybeSingle(),
+      supabase.from('events').select('status').eq('id', id).single(),
+    ])
+    if (ev) setEventStatus(ev.status)
+    setEventbrite({
+      status: pub?.status ?? 'not_started',
+      url: pub?.external_url ?? null,
+      lastError: pub?.last_error ?? null,
+      needsCheck: pub?.needs_check ?? false,
+    })
+  }, [])
+
+  async function runEventbrite(action: 'sync' | 'publish' | 'clear_check', id: string) {
+    setSending(true)
+    const message = await callEventbrite(action, id)
+    await loadEventbrite(id)
+    if (message) setEventbrite((s) => (s ? { ...s, lastError: message } : s))
+    setSending(false)
+    return message === null
+  }
+
   useEffect(() => {
-    if (!eventId) return
-    supabase.from('events').select('*').eq('id', eventId).single().then(async ({ data, error }) => {
+    if (!initialId) return
+    supabase.from('events').select('*').eq('id', initialId).single().then(async ({ data, error }) => {
+      await loadEventbrite(initialId)
       if (error || !data) {
         setSaveError('Couldn’t load this event. Please go back and try again.')
       } else {
@@ -38,7 +84,7 @@ export function EventForm({ eventId, onDone }: Props) {
       }
       setLoading(false)
     })
-  }, [eventId])
+  }, [initialId, loadEventbrite])
 
   function set<K extends keyof EventFormValues>(key: K, value: EventFormValues[K]) {
     setValues((v) => ({ ...v, [key]: value }))
@@ -62,6 +108,7 @@ export function EventForm({ eventId, onDone }: Props) {
 
     setSaving(true)
     setSaveError(null)
+    setSavedNote(null)
     const id = eventId ?? crypto.randomUUID()
 
     let path = coverPath
@@ -81,8 +128,17 @@ export function EventForm({ eventId, onDone }: Props) {
       : await supabase.from('events').insert({ id, ...row })
     setSaving(false)
     if (error) return setSaveError('The event couldn’t be saved. Please check the details and try again.')
-    onDone()
+
+    setEventId(id)
+    setCoverPath(path)
+    setNewCover(null)
+    const sent = await runEventbrite('sync', id)
+    setSavedNote(sent
+      ? (isLive ? 'Saved, and the live Eventbrite event is updated.' : 'Saved, and the Eventbrite draft is up to date.')
+      : 'Saved in the dashboard, but Eventbrite wasn’t updated. See below.')
   }
+
+  const isLive = eventStatus === 'published' || eventbrite?.status === 'live'
 
   if (loading) return <p className="muted">Loading…</p>
 
@@ -90,7 +146,21 @@ export function EventForm({ eventId, onDone }: Props) {
     <section>
       <button type="button" className="link" onClick={onDone}>← Back to events</button>
       <h2>{eventId ? 'Edit event' : 'New event'}</h2>
-      <p className="muted">Saved as a draft. Nothing is published to Eventbrite or the website yet.</p>
+      <p className="muted">
+        {isLive
+          ? 'This event is live. Saving updates it on Eventbrite straight away.'
+          : 'Saving updates a private Eventbrite draft. Nothing goes public until you press Publish.'}
+      </p>
+
+      {eventId && (
+        <PublishPanel
+          state={eventbrite}
+          busy={sending}
+          onRetry={() => runEventbrite('sync', eventId)}
+          onPublish={() => runEventbrite('publish', eventId)}
+          onClearCheck={async () => { if (await runEventbrite('clear_check', eventId)) await runEventbrite('sync', eventId) }}
+        />
+      )}
 
       <form onSubmit={onSubmit} noValidate>
         <Field label="Title" error={errors.title}>
@@ -153,7 +223,10 @@ export function EventForm({ eventId, onDone }: Props) {
         {coverPreview && <img className="cover-preview" src={coverPreview} alt="Cover image preview" />}
 
         {saveError && <p className="error" role="alert">{saveError}</p>}
-        <button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save draft'}</button>
+        {savedNote && <p className="muted" role="status">{savedNote}</p>}
+        <button type="submit" disabled={saving || sending}>
+          {saving || sending ? 'Saving…' : isLive ? 'Save and update live event' : 'Save draft'}
+        </button>
       </form>
     </section>
   )

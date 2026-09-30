@@ -124,3 +124,12 @@ fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 1rem; m
 button.link { background: none; color: var(--muted); padding: 0; margin-bottom: 1rem; font-weight: 500; }
 button.link:hover { color: var(--accent); }
 section > form { margin-top: 1rem; }
+
+.panel { border: 1px solid var(--border); border-radius: 10px; padding: 1rem; margin: 1rem 0; background: var(--surface); display: grid; gap: 0.6rem; }
+.panel p { margin: 0; }
+.panel .row { margin: 0; }
+.confirm { border-left: 3px solid var(--accent); padding-left: 0.75rem; display: grid; gap: 0.5rem; }
+.row-start { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.badge-draft, .badge-not_started { color: var(--muted); }
+.badge-live { color: #067647; border-color: #067647; }
+a { color: var(--accent); }
