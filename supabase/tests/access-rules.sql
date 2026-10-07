@@ -54,7 +54,9 @@ begin
   report := report || format('%s  created_by is filled in automatically', case when passed then 'PASS' else 'FAIL' end);
   failures := failures + (not passed)::int;
 
-  update public.events set title = 'Support Group - Mayo (Oct)' where id = test_ev;
+  update public.events set title = 'Support Group - Mayo (Oct)',
+    website_title = 'Support Group – Mayo', website_text = 'Short note',
+    website_location = 'Castlebar, Co. Mayo' where id = test_ev;
   get diagnostics n = row_count;
   passed := n = 1;
   report := report || format('%s  admin can edit an event', case when passed then 'PASS' else 'FAIL' end);

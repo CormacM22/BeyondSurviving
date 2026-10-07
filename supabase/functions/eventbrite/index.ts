@@ -7,6 +7,7 @@
 //   POST { action: 'cancel',      eventId }  cancel on Eventbrite, then take the website post down
 //                                            (can't be undone)
 //   POST { action: 'website',     eventId }  retry just the website step
+//   POST { action: 'list_posts' }            the website's Events posts, to choose one to reuse
 //   POST { action: 'clear_check', eventId, target? }  after a person has checked Eventbrite
 //                                            (or WordPress) for a duplicate, allow saving again
 //
@@ -14,8 +15,10 @@
 // WORDPRESS_USER, WORDPRESS_APP_PASSWORD.
 // EVENTBRITE_LISTED must be exactly "true" for events to appear in Eventbrite
 // search, and WORDPRESS_POST_STATUS exactly "publish" for website posts to go
-// public. Anything else (including unset) keeps them unlisted / as hidden
-// drafts, so testing can never advertise test events.
+// public. Anything else (including unset) is testing mode: events stay
+// unlisted, and the dashboard never creates anything public on the website,
+// never makes a post public, and never takes over a public post. (A post that
+// Ciara herself publishes keeps getting its event's details updated.)
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { eventbriteApi } from '../_shared/eventbrite/api.ts'
@@ -54,8 +57,14 @@ Deno.serve(async (req) => {
     if (permError || allowed !== true) return reply(403, { ok: false, message: 'You don’t have access to events.' })
 
     const { action, eventId, target = 'eventbrite' } = await req.json().catch(() => ({}))
-    if (typeof eventId !== 'string' || !['sync', 'publish', 'cancel', 'website', 'clear_check'].includes(action)) {
+    const ACTIONS = ['sync', 'publish', 'cancel', 'website', 'clear_check', 'list_posts']
+    if (!ACTIONS.includes(action) || (action !== 'list_posts' && typeof eventId !== 'string')) {
       return reply(400, { ok: false, message: 'Bad request' })
+    }
+
+    if (action === 'list_posts') {
+      const posts = await wordpressApi(env('WORDPRESS_URL'), env('WORDPRESS_USER'), env('WORDPRESS_APP_PASSWORD')).listEventPosts()
+      return reply(200, { ok: true, posts })
     }
 
     const db = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'))

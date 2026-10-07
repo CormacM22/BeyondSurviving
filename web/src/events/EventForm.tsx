@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { PublishPanel, type EventbriteState } from './PublishPanel'
 import { WebsitePanel, type WebsiteState } from './WebsitePanel'
 import { PageHeader } from '../layout/AppShell'
+import { PostPicker } from './PostPicker'
 import {
   CATEGORIES, SUMMARY_MAX, copyOf, emptyForm, fromRow, toRow, validate,
   type EventFormValues, type EventRow, type FormErrors,
@@ -62,6 +63,8 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
   // When this is a copy: the original's title and start, until the copy is first saved.
   const [copiedFrom, setCopiedFrom] = useState<{ title: string; startLocal: string } | null>(null)
   const [copyLoading, setCopyLoading] = useState(!!copyFrom)
+  // Website post: create a new one, or update one of the existing posts.
+  const [reusePost, setReusePost] = useState(false)
 
   const loadEventbrite = useCallback(async (id: string) => {
     const [{ data: pubs }, { data: ev }] = await Promise.all([
@@ -80,6 +83,7 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
         needsCheck: pub?.needs_check ?? false,
         hasPost: !!pub?.external_id,
         note: (pub?.meta as { note?: string | null } | undefined)?.note ?? null,
+        handedOver: !!(pub?.meta as { handedOver?: boolean } | undefined)?.handedOver,
       }
     }
     setEventbrite(stateOf('eventbrite'))
@@ -108,6 +112,7 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
       } else {
         const copy = copyOf(data as EventRow)
         setValues(copy)
+        setReusePost(!!copy.websitePostId)
         setCopiedFrom({ title: copy.title, startLocal: copy.startLocal })
         setCoverPath(data.cover_image_path)
         if (data.cover_image_path) {
@@ -128,6 +133,7 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
         setSaveError('Couldn’t load this event. Please go back and try again.')
       } else {
         setValues(fromRow(data as EventRow))
+        setReusePost(!!(data as EventRow).website_post_id)
         setCoverPath(data.cover_image_path)
         if (data.cover_image_path) {
           const { data: signed } = await supabase.storage
@@ -156,6 +162,7 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     const found = validate(values, { copiedFromStart: copiedFrom?.startLocal })
+    if (reusePost && !values.websitePostId) found.websitePostId = 'Choose the post to update, or choose “Create a new post”.'
     setErrors(found)
     if (Object.keys(found).length > 0) return
 
@@ -232,7 +239,8 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
         <form className="event-form" onSubmit={onSubmit} noValidate>
           <fieldset className="plain" disabled={isCancelled}>
             <section className="form-section" aria-labelledby="sec-event">
-              <h2 id="sec-event" className="section-title">The event</h2>
+              <h2 id="sec-event" className="section-title">Eventbrite</h2>
+              <p className="section-note">The full details people read before they register.</p>
               <Field label="Title" error={errors.title}>
                 <input value={values.title} onChange={(e) => set('title', e.target.value)} />
               </Field>
@@ -248,8 +256,52 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
               >
                 <input value={values.summary} onChange={(e) => set('summary', e.target.value)} />
               </Field>
-              <Field label="Description" hint="Shown on Eventbrite and the website. Leave a blank line between paragraphs." error={errors.description}>
-                <textarea rows={8} value={values.description} onChange={(e) => set('description', e.target.value)} />
+              <Field label="Description" hint="Start a line with - for a bullet point. Put **two stars** around words for bold. Leave a blank line between paragraphs." error={errors.description}>
+                <textarea rows={12} value={values.description} onChange={(e) => set('description', e.target.value)} />
+              </Field>
+            </section>
+
+            <section className="form-section" aria-labelledby="sec-website">
+              <h2 id="sec-website" className="section-title">Website post</h2>
+              <p className="section-note">
+                A short version for the Events page. The date and time come from “When” below, and the post ends with “Find out more and register here”, linking to this event on Eventbrite.
+              </p>
+              <Field label="Title on the website (optional)" hint="Leave blank to use the Eventbrite title." error={errors.websiteTitle}>
+                <input value={values.websiteTitle} placeholder={values.title} onChange={(e) => set('websiteTitle', e.target.value)} />
+              </Field>
+              <fieldset className="choice" disabled={!!website?.hasPost}>
+                <legend>Which post?</legend>
+                <label className="checkbox">
+                  <input type="radio" name="post-choice" checked={!reusePost}
+                    onChange={() => { setReusePost(false); set('websitePostId', '') }} />
+                  Create a new post
+                </label>
+                <label className="checkbox">
+                  <input type="radio" name="post-choice" checked={reusePost} onChange={() => setReusePost(true)} />
+                  Update one of the existing posts
+                </label>
+                {website?.hasPost && <small className="hint">This event’s website post is already set.</small>}
+              </fieldset>
+              {reusePost && (
+                <PostPicker
+                  value={values.websitePostId}
+                  disabled={!!website?.hasPost}
+                  error={errors.websitePostId}
+                  onChange={(id) => set('websitePostId', id)}
+                />
+              )}
+              <Field
+                label="Location on the event card (optional)"
+                hint="Shown under the time on “What’s coming up?”. Add details like “(Weekly)” or “City Centre”. Leave blank to use the area."
+              >
+                <input
+                  value={values.websiteLocation}
+                  placeholder={values.isOnline ? 'Online' : values.publicArea || 'For example: Castlebar, Co. Mayo'}
+                  onChange={(e) => set('websiteLocation', e.target.value)}
+                />
+              </Field>
+              <Field label="Short text" hint="Start a line with - for a bullet point. Put **two stars** around words for bold. Leave a blank line between paragraphs." error={errors.websiteText}>
+                <textarea rows={6} value={values.websiteText} onChange={(e) => set('websiteText', e.target.value)} />
               </Field>
             </section>
 
@@ -330,6 +382,7 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
                   onRetry={() => runEventbrite('sync', eventId)}
                   onPublish={() => runEventbrite('publish', eventId)}
                   onCancel={() => runEventbrite('cancel', eventId)}
+                  hidesWebsitePost={!!website?.hasPost && website.status !== 'cancelled'}
                   onClearCheck={async () => { if (await runEventbrite('clear_check', eventId)) await runEventbrite('sync', eventId) }}
                 />
               ) : (
@@ -341,7 +394,7 @@ export function EventForm({ eventId: initialId, copyFrom, onDone, onCreated, onC
                 <WebsitePanel
                   state={website}
                   busy={sending}
-                  outOfStep={!!website && (
+                  outOfStep={!!website && !website.handedOver && (
                     isCancelled
                       ? website.status !== 'cancelled' && (website.status !== 'not_started' || website.hasPost)
                       : eventbrite?.status === 'live' && website.status === 'not_started'

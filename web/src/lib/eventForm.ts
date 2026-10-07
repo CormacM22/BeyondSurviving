@@ -16,6 +16,13 @@ export type EventFormValues = {
   title: string
   summary: string
   description: string
+  /** The website post's title (optional: the event title is used if blank) and short text. */
+  websiteTitle: string
+  websiteText: string
+  /** The location line on the website's event card; blank → the area (or "Online"). */
+  websiteLocation: string
+  /** An existing website post to update instead of creating one; blank for a new post. */
+  websitePostId: string
   startLocal: string
   endLocal: string
   isOnline: boolean
@@ -30,6 +37,10 @@ export type EventRow = {
   title: string
   summary: string | null
   description: string
+  website_title: string | null
+  website_text: string | null
+  website_location: string | null
+  website_post_id: string | null
   starts_at: string
   ends_at: string
   timezone: string
@@ -50,6 +61,10 @@ export function emptyForm(): EventFormValues {
     title: '',
     summary: '',
     description: '',
+    websiteTitle: '',
+    websiteText: '',
+    websiteLocation: '',
+    websitePostId: '',
     startLocal: '',
     endLocal: '',
     isOnline: false,
@@ -72,6 +87,7 @@ export function validate(v: EventFormValues, opts: { copiedFromStart?: string } 
   const e: FormErrors = {}
   if (blank(v.title)) e.title = 'Please add a title.'
   if (blank(v.description)) e.description = 'Please add a description.'
+  if (blank(v.websiteText)) e.websiteText = 'Please add the short text for the website.'
   if (v.summary.trim().length > SUMMARY_MAX) e.summary = `Keep the summary to ${SUMMARY_MAX} characters or fewer.`
   if (!v.startLocal) e.startLocal = 'Please choose when it starts.'
   else if (opts.copiedFromStart && v.startLocal === opts.copiedFromStart) {
@@ -98,6 +114,10 @@ export function toRow(v: EventFormValues): EventRow {
     title: v.title.trim(),
     summary: orNull(v.summary),
     description: v.description.trim(),
+    website_title: orNull(v.websiteTitle),
+    website_text: v.websiteText.trim(),
+    website_location: orNull(v.websiteLocation),
+    website_post_id: orNull(v.websitePostId),
     starts_at: dublinLocalToUtc(v.startLocal),
     ends_at: dublinLocalToUtc(v.endLocal),
     timezone: 'Europe/Dublin',
@@ -115,6 +135,10 @@ export function fromRow(r: EventRow): EventFormValues {
     title: r.title,
     summary: r.summary ?? '',
     description: r.description,
+    websiteTitle: r.website_title ?? '',
+    websiteText: r.website_text ?? '',
+    websiteLocation: r.website_location ?? '',
+    websitePostId: r.website_post_id ?? '',
     startLocal: utcToDublinLocal(r.starts_at),
     endLocal: utcToDublinLocal(r.ends_at),
     isOnline: r.is_online,

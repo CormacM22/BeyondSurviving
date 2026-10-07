@@ -6,10 +6,11 @@
 // same rules as Eventbrite for never creating a duplicate. Cancelling switches
 // the post back to a hidden draft: the dashboard never deletes posts.
 
-import { descriptionHtml } from '../eventbrite/payload.ts'
+import { formatWordPressBlocks } from '../format.ts'
+import { dublinDateTime } from '../dublin.ts'
 import type { EventRecord, Meta, PublicationStore, Result } from '../eventbrite/types.ts'
 import { WordPressError } from './types.ts'
-import type { PostStatus, WordPressApi } from './types.ts'
+import type { EventDetails, PostStatus, WordPressApi } from './types.ts'
 
 const BUSY = 'The website post is already being updated. Please wait a moment and refresh.'
 const NEEDS_CHECK =
@@ -24,6 +25,22 @@ const OWNED_REFUSED =
   'Please update it in WordPress, or ask Cormac to raise the dashboard’s WordPress role to Author.'
 const SIGNED_OUT =
   'The dashboard can’t sign in to WordPress (its Application Password may have been revoked). Please tell Cormac.'
+const REUSE_GONE =
+  'The website post chosen for this event is in the Bin or no longer exists. ' +
+  'Please choose another post, or create a new one.'
+const REUSE_LIVE_IN_TEST =
+  'That post is live on the website. While the dashboard is in testing mode it only updates hidden posts, ' +
+  'so it never changes what the public sees. Live posts can be reused once it’s switched to publish mode.'
+const REUSE_UPCOMING =
+  'That post is still being used for an upcoming session, so the dashboard won’t replace it. ' +
+  'Choose another post (one whose session has passed) or create a new one, or wait until that session ' +
+  'has passed and then press “Update the website”.'
+const REUSE_UNSUITABLE = 'That post is private or waiting for review, so it can’t be reused. Please choose another post.'
+const REUSE_BAD_ID = 'The chosen website post isn’t valid. Please choose the post again.'
+const REUSE_BUSY = 'That website post is being updated for another event right now. Please try again in a moment.'
+const REUSE_REFUSED =
+  'WordPress won’t let the dashboard edit the chosen post. In WordPress, set this post’s Author to ' +
+  'Events Dashboard (Events → the post → Author), then press the button below.'
 // Eventbrite's own event pages only: exact hosts, so look-alikes don't pass.
 const EVENTBRITE_LINK = /^https:\/\/(www\.)?eventbrite\.(com|ie|co\.uk)\//i
 const GENERIC = 'Couldn’t finish updating the website. Please try again.'
@@ -44,14 +61,34 @@ const escapeAttr = (s: string) =>
 
 const paragraph = (inner: string) => `<!-- wp:paragraph -->\n${inner}\n<!-- /wp:paragraph -->`
 
-/** The post body, in WordPress block markup. Only the description and the link: never venue details. */
+/**
+ * The post body, in WordPress block markup: the short website text (the long
+ * description is Eventbrite's), then the registration link. Never venue details.
+ */
 export function postContent(ev: EventRecord, eventbriteUrl: string): string {
-  const paragraphs = descriptionHtml(ev.description).split('</p>').filter(Boolean).map((p) => paragraph(`${p}</p>`))
+  // Events saved before there was a website text fall back to the description.
+  const text = ev.website_text?.trim() ? ev.website_text : ev.description
   const register = paragraph(
     `<p>Find out more and register <strong><a href="${escapeAttr(eventbriteUrl)}" ` +
       'target="_blank" rel="noreferrer noopener">here</a></strong></p>',
   )
-  return [...paragraphs, register].join('\n\n')
+  return [formatWordPressBlocks(text), register].join('\n\n')
+}
+
+/**
+ * The date, times and location shown on the website's event card ("What's coming
+ * up?"). The location is the line written for the website, else the area (or
+ * "Online"): never the venue name or street address.
+ */
+export function eventDetails(ev: EventRecord): EventDetails {
+  const start = dublinDateTime(ev.starts_at)
+  const end = dublinDateTime(ev.ends_at)
+  return {
+    event_date: start.date,
+    event_start_time: start.time,
+    event_end_time: end.time,
+    event_location: ev.website_location?.trim() || (ev.is_online ? 'Online' : ev.public_area ?? ''),
+  }
 }
 
 /** Creates the website post the first time; updates it after that. */
@@ -79,6 +116,20 @@ export async function syncToWordPress(
 
   try {
     const ev = await store.loadEvent()
+
+    // This event's post was reused by a later event. Unless Ciara has since changed
+    // this event's post choice, never touch it again.
+    if (claim.externalId === null && meta.handedOver) {
+      // (Handed over before the choice was recorded: treat as unchanged, never reclaim.)
+      if (meta.handedOverChoice === undefined || (ev.website_post_id ?? '') === meta.handedOverChoice) {
+        meta.note = 'This event’s website post was reused for a later event, so this event no longer changes it. ' +
+          'Choose another post (or a new one) to post it again.'
+        await store.succeed(claim.status, meta)
+        return { ok: true, url: null }
+      }
+      for (const k of ['handedOver', 'handedOverChoice', 'lastSetStatus', 'statusOwnedByCiara', 'reused', 'note'] as const) delete meta[k]
+    }
+
     if (ev.status === 'cancelled' || claim.status === 'cancelled') {
       return release('This event is cancelled, so it isn’t posted on the website.')
     }
@@ -88,16 +139,46 @@ export async function syncToWordPress(
     }
     if (!EVENTBRITE_LINK.test(link.url)) return release('The Eventbrite link doesn’t look right, so nothing was posted.')
 
-    const title = escapeText(ev.title)
+    const title = escapeText(ev.website_title?.trim() || ev.title)
     const content = postContent(ev, link.url)
+    const acf = eventDetails(ev)
     let url = claim.url
     // What the dashboard records: WordPress's actual status, not what it asked for.
     const recorded = (status: string) => (status === 'publish' ? 'live' : 'draft')
 
-    if (claim.externalId === null) {
+    let externalId = claim.externalId
+    let current: string
+
+    if (externalId === null && ev.website_post_id) {
+      // Reuse one of Ciara's existing posts (as she does by hand) instead of creating one.
+      // The id goes into a WordPress address, so it must be a plain post number.
+      if (!/^\d+$/.test(ev.website_post_id)) return await release(REUSE_BAD_ID)
+      let post: { status: string; link: string } | null
+      try {
+        post = await api.getPost(ev.website_post_id)
+      } catch (e) {
+        // WordPress hides other authors' posts from the dashboard until the author is changed.
+        if (e instanceof WordPressError && e.definitelyRefused && e.status !== 401) return await release(REUSE_REFUSED)
+        throw e
+      }
+      if (!post || post.status === 'trash') return await release(REUSE_GONE)
+      if (post.status !== 'publish' && post.status !== 'draft') return await release(REUSE_UNSUITABLE)
+      // Testing mode must never change anything the public can see.
+      if (post.status === 'publish' && opts.postStatus !== 'publish') return await release(REUSE_LIVE_IN_TEST)
+      const taken = await store.takeOverPost(ev.website_post_id, post.link)
+      if (taken === 'busy') return await release(REUSE_BUSY)
+      if (taken === 'upcoming') return await release(REUSE_UPCOMING)
+      externalId = ev.website_post_id
+      url = post.link
+      current = post.status
+      // Choosing to reuse it is Ciara's explicit say-so: the dashboard looks after it from here.
+      meta.lastSetStatus = post.status
+      meta.statusOwnedByCiara = false
+      meta.reused = true
+    } else if (externalId === null) {
       let created: { id: string; link: string }
       try {
-        created = await api.createPost({ title, content, status: opts.postStatus })
+        created = await api.createPost({ title, content, status: opts.postStatus, acf })
       } catch (e) {
         if (e instanceof WordPressError && e.definitelyRefused) return await release(userMessage(e))
         console.error(e)
@@ -116,9 +197,10 @@ export async function syncToWordPress(
       meta.note = null
       await store.succeed(recorded(opts.postStatus), meta)
       return { ok: true, url }
+    } else {
+      current = await api.getPostStatus(externalId)
     }
 
-    const current = await api.getPostStatus(claim.externalId)
     // If Ciara removed the post, respect that: never bring it back.
     if (current === 'trash' || current === 'gone') {
       meta.note = 'This post was removed in WordPress, so the dashboard is leaving it alone.'
@@ -129,14 +211,17 @@ export async function syncToWordPress(
     // status is hers from then on, for good. The details are still kept up to date.
     if (current !== (meta.lastSetStatus ?? 'draft')) meta.statusOwnedByCiara = true
 
-    const fields: { title: string; content: string; status?: PostStatus } = { title, content }
-    // Only ever change the status deliberately (draft → published when going live).
-    if (!meta.statusOwnedByCiara && opts.postStatus !== current) fields.status = opts.postStatus
+    const fields: { title: string; content: string; status?: PostStatus; acf: EventDetails } = { title, content, acf }
+    // The only status change an update ever makes is putting a post up, and only in
+    // publish mode. So while testing (draft mode) a live post is never unpublished;
+    // posts are only hidden by takeDownFromWordPress when an event is cancelled.
+    if (!meta.statusOwnedByCiara && opts.postStatus === 'publish' && current !== 'publish') fields.status = 'publish'
     try {
-      await api.updatePost(claim.externalId, fields)
+      await api.updatePost(externalId, fields)
     } catch (e) {
       const refused = e instanceof WordPressError && e.definitelyRefused && e.status !== 401
       if (meta.statusOwnedByCiara && refused) return await release(OWNED_REFUSED)
+      if (meta.reused && refused) return await release(REUSE_REFUSED)
       throw e
     }
     if (fields.status) meta.lastSetStatus = fields.status

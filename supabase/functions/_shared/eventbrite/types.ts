@@ -10,6 +10,13 @@ export type EventRecord = {
   title: string
   summary: string | null
   description: string
+  /** The website post's own title and short text (the description is Eventbrite's). */
+  website_title: string | null
+  website_text: string | null
+  /** The location line on the website's event card, e.g. "Online (Weekly)". */
+  website_location: string | null
+  /** An existing website post to reuse for this event, instead of creating a new one. */
+  website_post_id: string | null
   starts_at: string
   ends_at: string
   timezone: string
@@ -33,6 +40,15 @@ export type Meta = {
   lastSetStatus?: string
   /** WordPress: Ciara has changed the post's status herself, so the dashboard never sets it again. */
   statusOwnedByCiara?: boolean
+  /** WordPress: this event's post was reused by a later event; this event never touches it again. */
+  handedOver?: boolean
+  /**
+   * WordPress: this event's post choice when it handed its post over ('' = "create a new
+   * post"). Changing the choice afterwards starts afresh; leaving it does nothing.
+   */
+  handedOverChoice?: string
+  /** WordPress: the post is one of Ciara's existing posts, reused for this event. */
+  reused?: boolean
   /** WordPress: an informational note for the panel (not an error), e.g. "removed in WordPress". */
   note?: string | null
 }
@@ -98,6 +114,12 @@ export interface PublicationStore {
   loadEvent(): Promise<EventRecord>
   /** The event's Eventbrite publication (status and link), for the website post. */
   loadEventbriteLink(): Promise<{ status: PublicationStatus; url: string | null } | null>
+  /**
+   * Makes this event the one holding an existing website post, handing it over from
+   * any earlier event (which then never touches it again). 'busy' if another event
+   * is updating that post right now.
+   */
+  takeOverPost(postId: string, url: string): Promise<'ok' | 'busy' | 'upcoming'>
   /** Must be called straight after Eventbrite creates the event. */
   recordCreated(externalId: string, url: string): Promise<void>
   saveMeta(meta: Meta): Promise<void>

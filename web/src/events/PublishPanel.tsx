@@ -14,6 +14,8 @@ type Props = {
   onPublish: () => void
   onCancel: () => void
   onClearCheck: () => void
+  /** Cancelling will also hide this event's website post. */
+  hidesWebsitePost?: boolean
 }
 
 const STATUS_TEXT: Record<EventbriteState['status'], string> = {
@@ -23,7 +25,7 @@ const STATUS_TEXT: Record<EventbriteState['status'], string> = {
   cancelled: 'Cancelled',
 }
 
-export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClearCheck }: Props) {
+export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClearCheck, hidesWebsitePost }: Props) {
   const [confirming, setConfirming] = useState(false)
   const [confirmingCancel, setConfirmingCancel] = useState(false)
 
@@ -83,6 +85,9 @@ export function PublishPanel({ state, busy, onRetry, onPublish, onCancel, onClea
                 : 'It’s cancelled on Eventbrite straight away.'}{' '}
               <strong>This can’t be undone.</strong>
             </p>
+            {hidesWebsitePost && (
+              <p>Its post on the website will be hidden, until another session uses it.</p>
+            )}
             {state.status === 'live' && (
               <p>
                 If anyone has registered, Eventbrite only allows cancelling on Eventbrite itself, after refunding

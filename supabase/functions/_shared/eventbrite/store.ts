@@ -40,6 +40,12 @@ export function publicationStore(
       return data ? { status: data.status as PublicationStatus, url: data.external_url as string | null } : null
     },
 
+    async takeOverPost(postId, url) {
+      const { data, error } = await db.rpc('take_over_post', { p_event_id: eventId, p_post_id: postId, p_url: url })
+      if (error) throw new Error(`Couldn’t take over the website post: ${error.message}`)
+      return data === 'busy' ? 'busy' : 'ok'
+    },
+
     async recordCreated(externalId, url) {
       await update({ external_id: externalId, external_url: url })
     },

@@ -2,7 +2,12 @@ import type { EventbriteState } from './PublishPanel'
 
 // The website post has the same shape of status as the Eventbrite copy, plus an
 // informational note (e.g. "changed in WordPress, so left alone").
-export type WebsiteState = EventbriteState & { note: string | null; hasPost: boolean }
+export type WebsiteState = EventbriteState & {
+  note: string | null
+  hasPost: boolean
+  /** Its post was reused by a later event, so this event no longer changes it. */
+  handedOver: boolean
+}
 
 type Props = {
   state: WebsiteState | null

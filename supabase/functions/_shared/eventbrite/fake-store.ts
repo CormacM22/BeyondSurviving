@@ -30,6 +30,13 @@ export class FakeStore implements PublicationStore {
     return structuredClone(this.pub)
   }
   async loadEvent() { return structuredClone(this.event) }
+  takeOverResult: 'ok' | 'busy' | 'upcoming' = 'ok'
+  tookOver: string[] = []
+  async takeOverPost(postId: string, url: string) {
+    if (this.takeOverResult !== 'ok') return this.takeOverResult
+    this.tookOver.push(postId); this.pub.externalId = postId; this.pub.url = url
+    return 'ok' as const
+  }
   async loadEventbriteLink() { return this.eventbriteLink }
   async recordCreated(externalId: string, url: string) { this.write(); this.pub.externalId = externalId; this.pub.url = url }
   async saveMeta(meta: Meta) { this.write(); this.pub.meta = { ...meta } }

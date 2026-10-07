@@ -6,6 +6,10 @@ const inPerson: EventFormValues = {
   title: '  Support Group – Mayo ',
   summary: 'Monthly peer support',
   description: 'A friendly monthly meetup.',
+  websiteTitle: '',
+  websiteText: 'Short website note.',
+  websiteLocation: '',
+  websitePostId: '',
   startLocal: '2026-10-10T11:00',
   endLocal: '2026-10-10T13:00',
   isOnline: false,
@@ -28,8 +32,12 @@ describe('validate', () => {
   it('requires the basics', () => {
     const errors = validate(emptyForm())
     expect(Object.keys(errors).sort()).toEqual(
-      ['capacity', 'description', 'endLocal', 'publicArea', 'startLocal', 'title', 'venueAddress'].sort(),
+      ['capacity', 'description', 'endLocal', 'publicArea', 'startLocal', 'title', 'venueAddress', 'websiteText'].sort(),
     )
+  })
+
+  it('the website title is optional', () => {
+    expect(validate({ ...inPerson, websiteTitle: '' }).websiteTitle).toBeUndefined()
   })
 
   it('treats blank-looking text as missing', () => {
@@ -77,6 +85,22 @@ describe('toRow', () => {
     expect(row.venue_address).toBeNull()
   })
 
+  it('stores the website title and text, with an empty title as nothing', () => {
+    expect(toRow({ ...inPerson, websiteTitle: '  ' }).website_title).toBeNull()
+    expect(toRow({ ...inPerson, websiteTitle: ' Support Group – Mayo ' }).website_title).toBe('Support Group – Mayo')
+    expect(toRow(inPerson).website_text).toBe('Short website note.')
+  })
+
+  it('stores the website location, with an empty one as nothing', () => {
+    expect(toRow(inPerson).website_location).toBeNull()
+    expect(toRow({ ...inPerson, websiteLocation: ' Online (Weekly) ' }).website_location).toBe('Online (Weekly)')
+  })
+
+  it('stores the website post to reuse, or nothing for a new post', () => {
+    expect(toRow(inPerson).website_post_id).toBeNull()
+    expect(toRow({ ...inPerson, websitePostId: '5505' }).website_post_id).toBe('5505')
+  })
+
   it('an empty summary is stored as nothing', () => {
     expect(toRow({ ...inPerson, summary: '  ' }).summary).toBeNull()
   })
@@ -94,6 +118,10 @@ describe('copying an event', () => {
 
   it('keeps every detail of the original', () => {
     expect(copyOf(original)).toEqual({ ...inPerson, title: 'Support Group – Mayo' })
+  })
+
+  it('a copy reuses the same website post', () => {
+    expect(copyOf({ ...original, website_post_id: '5505' }).websitePostId).toBe('5505')
   })
 
   it('refuses to save until the start time is changed', () => {

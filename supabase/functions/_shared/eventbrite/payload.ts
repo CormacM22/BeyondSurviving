@@ -2,6 +2,7 @@
 // Eventbrite gets the event's area (as its venue), matching how Ciara lists
 // events today. The venue name and street address aren't sent.
 
+import { formatHtml } from '../format.ts'
 import type { Category, EventRecord } from './types.ts'
 
 // Eventbrite category ids (GET /categories/).
@@ -27,13 +28,9 @@ function escapeHtml(text: string): string {
     .replaceAll('"', '&quot;')
 }
 
-/** Plain text → simple HTML: blank lines separate paragraphs, single line breaks are kept. */
+/** The description as Eventbrite shows it: paragraphs, bullet points and bold (see format.ts). */
 export function descriptionHtml(text: string): string {
-  return text
-    .trim()
-    .split(/\n\s*\n/)
-    .map((para) => `<p>${escapeHtml(para.trim()).replaceAll('\n', '<br>')}</p>`)
-    .join('')
+  return formatHtml(text)
 }
 
 export type EventPayload = {

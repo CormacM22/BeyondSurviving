@@ -453,3 +453,17 @@ textarea { resize: vertical; }
 
 .page-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .page-title-row .btn { margin-top: 0.35rem; }
+
+.section-note { color: var(--ink-soft); margin-top: -0.6rem; }
+
+fieldset.choice { border: 0; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+fieldset.choice legend { font-weight: 600; margin-bottom: 0.35rem; padding: 0; }
+.checkbox input[type='radio'] { accent-color: var(--teal); }
+.warning {
+  background: #fff4e8;
+  border: 1.5px solid var(--peach);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9rem;
+}
+
